@@ -1,3 +1,4 @@
+import struct
 from itertools import *
 from Crypto.Cipher import AES
 from Crypto.Protocol import KDF
@@ -30,55 +31,74 @@ def unbytify(b):
             return i
         n += 1
 
+def find_matching_offset(streams, inactive_streams, plaintexts_bytes):
+    offset = 1
+    for streams_bytes in zip(*streams):
+        [next(s) for s in inactive_streams]
+        if streams_bytes == plaintexts_bytes:
+            return offset
+        offset += 1
+
+def encrypt(keys, plaintexts, iv):
+    _plaintexts = list(plaintexts)
+    streams = tuple(StreamCipher(key, iv) for key in keys)
+    active_streams = list(streams)
+    inactive_streams = []
+
+    ciphertext = b''
+
+    while True:
+        plaintexts_bytes = tuple(d[0] for d in _plaintexts if d)
+
+        filtered_plaintexts = []
+        n = 0
+        for i, d in enumerate(_plaintexts):
+            if d:
+                filtered_plaintexts.append(d[1:])
+            else:
+                inactive_streams.append(active_streams[i-n])
+                del active_streams[i-n]
+                n+=1
+        _plaintexts = filtered_plaintexts
+
+        if not plaintexts_bytes:
+            break
+
+        ciphertext += bytify(find_matching_offset(tuple(active_streams), inactive_streams, plaintexts_bytes))
+
+    max_len = max(len(d) for d in plaintexts)
+    paddings = [max_len - len(d) for d in plaintexts]
+    paddings_struct = [struct.pack('<I', p) for p in paddings]
+
+    for i in range(4):
+        ciphertext += bytify(find_matching_offset(streams, [], tuple(p[i] for p in paddings_struct)))
+
+    return ciphertext
+
+def decrypt(key, ciphertext, iv):
+    stream = StreamCipher(key, iv)
+    plaintext = bytearray()
+
+    _ciphertext = bytearray(ciphertext)
+
+    while True:
+        i = unbytify(_ciphertext)
+        plaintext.append(next(islice(stream, i-1, i)))
+        if not len(_ciphertext):
+            break
+
+    plaintext = bytes(plaintext)
+    padding = struct.unpack('<I', plaintext[-4:])[0]
+
+    return plaintext[:-padding-4]
+
 if __name__ == '__main__':
     #encrypt 2 files
-    out = []
-    iv = Random.get_random_bytes(16)
-    inputs = [('a','keya'),('b','keyb')]
-    streams = list((StreamCipher(KDF.PBKDF2(p, iv), iv), open(f,'rb')) for (f,p) in inputs)
-
-    while True:
-        bytes_list = []
-        to_delete = []
-        for i, (_,f) in enumerate(streams):
-            b = f.read(1)
-            if not b:
-                to_delete.append(i)
-            else:
-                bytes_list.append(ord(b))
-
-        for n,i in enumerate(to_delete):
-            del streams[i-n]
-
-        if len(streams) == 0:
-            break
-
-        offset = 1
-        bytes_tuple = tuple(bytes_list)
-        stream_ciphers = tuple(s for (s,_) in streams)
-        print(bytes_tuple)
-        for streams_tuple in zip(*stream_ciphers):
-            if streams_tuple == bytes_tuple:
-                break
-            offset += 1
-        print(offset)
-        out.append(offset)
-
-    ciphertext = iv + b''.join(bytify(b) for b in out)
-    print('ciphertext:', ciphertext)
+    plaintexts = [b'123456', b'1234567890']
+    keys = [b'\x00'*16, b'\xff'*16]
+    ciphertext = encrypt(keys, plaintexts, iv=b'\x00'*16)
+    print(ciphertext)
 
     # Decrypt second file
-    iv = ciphertext[:16]
-    data = list(ciphertext[16:])
-    key = KDF.PBKDF2('keyb', iv)
-    stream = StreamCipher(key, iv)
-    out = []
-
-    while True:
-        i = unbytify(data)
-        print(i)
-        out.append(next(islice(stream, i-1, i)))
-        if not len(data):
-            break
-
-    print('plaintext:', bytes(out))
+    plaintext = decrypt(b'\xff'*16, ciphertext, iv=b'\x00'*16)
+    print('plaintext:', plaintext)
