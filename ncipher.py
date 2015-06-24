@@ -1,3 +1,4 @@
+#!/bin/env python3
 import struct
 from itertools import *
 from Crypto.Cipher import AES
@@ -65,6 +66,7 @@ def encrypt(keys, plaintexts, iv):
             break
 
         ciphertext += bytify(find_matching_offset(tuple(active_streams), inactive_streams, plaintexts_bytes))
+        print(ciphertext)
 
     max_len = max(len(d) for d in plaintexts)
     paddings = [max_len - len(d) for d in plaintexts]
@@ -93,12 +95,43 @@ def decrypt(key, ciphertext, iv):
     return plaintext[:-padding-4]
 
 if __name__ == '__main__':
-    #encrypt 2 files
-    plaintexts = [b'123456', b'1234567890']
-    keys = [b'\x00'*16, b'\xff'*16]
-    ciphertext = encrypt(keys, plaintexts, iv=b'\x00'*16)
-    print(ciphertext)
+    import argparse
+    import getpass
+    import sys
 
-    # Decrypt second file
-    plaintext = decrypt(b'\xff'*16, ciphertext, iv=b'\x00'*16)
-    print('plaintext:', plaintext)
+    def prompt_key(iv, filename=None):
+        prompt = 'Password for file "{}": '.format(filename) if filename else 'Password: '
+        password = getpass.getpass(prompt)
+        return KDF.PBKDF2(password, iv)
+
+    parser = argparse.ArgumentParser(description=
+            'Encrypt multiple files with multiple passwords and decrypt ' + \
+            'one of them using the right password')
+
+    parser.add_argument('-o', '--output', type=argparse.FileType('wb'))
+    #parser.add_argument('-s', '--unitsize', type=int)
+
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('-e', '--encrypt', nargs='+', type=argparse.FileType('rb'))
+    group.add_argument('-d', '--decrypt', type=argparse.FileType('rb'))
+
+    args = parser.parse_args()
+
+    if args.encrypt:
+        iv = Random.get_random_bytes(16)
+        keys = [prompt_key(iv, f.name) for f in args.encrypt]
+        if len(keys) > len(set(keys)):
+            print("Can't use a password more than once", file=sys.stderr)
+            sys.exit(1)
+        plaintexts = [f.read() for f in args.encrypt]
+        ciphertext = encrypt(keys, plaintexts, iv)
+        args.output.write(iv + ciphertext)
+
+    elif args.decrypt:
+        infile = args.decrypt.read()
+        iv = infile[:16]
+        ciphertext = infile[16:]
+        key = prompt_key(iv)
+        plaintext = decrypt(key, ciphertext, iv)
+        args.output.write(plaintext)
+
